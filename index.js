@@ -21,6 +21,8 @@ if (process.argv.includes("--genConfig")) {
     fs.writeFileSync(`${username}.config.json`, JSON.stringify({
         username,
         password: "",
+        botToken: "Optional",
+        target: "", // ChannelUsername or UserID
         schedule: [
             null, // sun
             { // mon
@@ -54,7 +56,6 @@ if (process.argv.includes("--genConfig")) {
             },
             null, // sat
         ],
-        botToken: "Optional"
     }, undefined, 4))
 
     process.exit(0)
@@ -67,9 +68,32 @@ if (!fs.existsSync(`${username}.config.json`)) {
     process.exit(-1)
 }
 
+/**
+ * @type { boolean }
+ */
 const tg = process.argv.includes("--tg")
+
+/**
+ * @type { { 
+ *      username: string,
+ *      password: string,
+ *      botToken: string | undefined | null,
+ *      target: string | number | undefined | null,
+ *      schedule: {
+ *          selectionCandidate: {
+ *              room: string | undefined | null,
+ *              teacher: string | undefined | null,
+ *          },
+ *          plan: string
+ *      }[]
+ * } }
+ */
 const config = JSON.parse(fs.readFileSync(`${username}.config.json`).toString())
-const globalCookieStore = {}
+
+/**
+ * @type { Map<string, string> }
+ */
+const globalCookieStore = new Map()
 
 if (tg && (!config.botToken || !config.target)) {
     console.log("Error! Failed to remind via tg! Because no bot token or target was found!")
@@ -110,12 +134,14 @@ async function init() {
 /**
  * 
  * @param { axios.Axios } httpClient 
+ * @param { string } password
+ * @param { string } username  
  * @returns { { userNumber: string } }
  */
-async function login(httpClient) {
+async function login(httpClient, username, password) {
     const body = new FormData()
-    body.append("login_user_name", config.username)
-    body.append("login_password", config.password)
+    body.append("login_user_name", username)
+    body.append("login_password", password)
     body.append("login-submit", "Login")
     body.append("action", "login")
 
@@ -416,8 +442,8 @@ function updateCoolkies(r) {
             const entries = i.split(";")
             for (let e of entries) {
                 const [k, v] = e.split("=")
-                if (!["path", "expires", "Max-Age"].includes(k)) {
-                    globalCookieStore[k] = v
+                if (!["path", "expires", "max-age"].includes(k.toLowerCase())) {
+                    globalCookieStore.set(k, v)
                 }
             }
         }
@@ -426,8 +452,8 @@ function updateCoolkies(r) {
 
 function exportCookies() {
     let cookie = ""
-    for (let i in globalCookieStore) {
-        cookie += `${i}=${globalCookieStore[i]};`
+    for (let i in globalCookieStore.keys()) {
+        cookie += `${i}=${globalCookieStore.get(i)};`
     }
 
     if (cookie.length > 0) {
@@ -471,7 +497,7 @@ Date.prototype.getDOY = function() {
     await log("Begin process")
 
     const http = await init()
-    const credentials = await login(http)
+    const credentials = await login(http, config.username, config.password)
 
     const today = new Date()
     const weekBegin = addDays(today, -today.getDay())

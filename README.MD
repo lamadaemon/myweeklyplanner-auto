@@ -2,10 +2,10 @@
 
 [![996.icu](https://img.shields.io/badge/link-996.icu-red.svg)](https://996.icu)
 [![LICENSE](https://img.shields.io/badge/license-Anti%20996-blue.svg)](https://github.com/996icu/996.ICU/blob/master/LICENSE)
-A simple script used to automatically setup your plans in MyWeeklyPlanner
+[![npm](https://img.shields.io/npm/v/myweeklyplanner-auto)](https://www.npmjs.com/package/myweeklyplanner-auto)
 
-**Due to some reason npm dosen't let me push this package until 24hrs has passed.**
-**Check this out later**
+
+A simple script used to automatically setup your plans in MyWeeklyPlanner
 
 ## Usage
 
