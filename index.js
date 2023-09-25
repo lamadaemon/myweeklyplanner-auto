@@ -452,7 +452,7 @@ function updateCoolkies(r) {
 
 function exportCookies() {
     let cookie = ""
-    for (let i in globalCookieStore.keys()) {
+    for (let i of globalCookieStore.keys()) {
         cookie += `${i}=${globalCookieStore.get(i)};`
     }
 
@@ -512,7 +512,7 @@ Date.prototype.getDOY = function() {
 
         const goalDate = addDays(weekBegin, i)
         if (goalDate.getDOY() < today.getDOY()) {
-            await log(`Skipping ${date.format(goalDate, "YYYY-MM-DD")}(DOW) because they were gone ~ Yes Forever ~ Time flow like a river never stop`)
+            await log(`Skipping ${date.format(goalDate, "YYYY-MM-DD")} because they were gone ~ Yes Forever ~ Time flow like a river never stop`)
             continue
         }
 
@@ -550,8 +550,8 @@ Date.prototype.getDOY = function() {
             }
 
             if (!staff) {
-                console.info("Error! No result was found with candidate: " + JSON.stringify(data.selectionCandidate))
-                process.exit(-1)
+                await log("Error! No result was found with candidate: " + JSON.stringify(data.selectionCandidate) + " at: " + date.format(goalDate, "YYYY-MM-DD")) 
+                continue 
             }
 
             if (!await checkCapacity(http, staff, goalDate)) {
