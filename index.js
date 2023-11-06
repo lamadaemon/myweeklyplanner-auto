@@ -262,6 +262,56 @@ async function fetchDataTable(httpClient, credentials, d) {
 /**
  * 
  * @param {axios.Axios} httpClient 
+ * @param {*} credentials 
+ * @param {'current' | 'nextweek'} week
+ */
+async function checkAssignStatus(httpClient, credentials, week) {
+    const response = await httpClient.get("/ajax.DataTable.Fetch.php", {
+        headers: {
+            ...exportCookies()
+        },
+        params: {
+            "table_name": "plandates",
+            "sequence_flag": "N",
+            "action": "load-week",
+            "block_num": 1,
+            "selected_week_flag": week,
+            "selected_user": credentials.userNumber,
+            "_": Date.now()
+        }
+    })
+
+    updateCoolkies(response)
+    if (response.status != 200) {
+        throw new Error(`fetchDataTable failed #1! Server responsed a none 302 status code: ${response.status}. Check your password and try again later. Response dumpped to: ${await dumpResponse(response)}`)
+    } 
+    const { content } = JSON.parse(response.data)
+    if (!content) {
+        throw new Error(`fetchDataTable failed #2! Illegal response data. Response dumpped to: ${await dumpResponse(response)}`)
+    }
+     
+    const finder = /<td align='left' valign='top' class='(.+?)' onClick='' editable-by-student='([YN])' cell-date='([0-9]{4}-[0-9]{2}-[0-9]{2})' cell-block='([0-9])'/g
+
+    // 0: <drop>
+    // 1: flags (plan-day plan today datePlanComplete)
+    // 2: editable-by-student (Y/N)
+    // 3: date (yyyy-mm-dd)
+    // 4: cell block (i guess useless)
+    const matches = content.matchAll(finder)
+
+    const avaDates = []
+    for (const [_, flags, editable, date, block] of matches) {
+        if (!flags.includes("datePlanComplete") && editable.startsWith("Y")) {
+            avaDates.push(date)
+        }
+    }
+    // TODO skip days that already been assigned.
+    return avaDates
+}
+
+/**
+ * 
+ * @param {axios.Axios} httpClient 
  * @param {number} staffNumber
  * @param {Date} d
  * @returns {boolean}
@@ -499,6 +549,8 @@ Date.prototype.getDOY = function() {
     const http = await init()
     const credentials = await login(http, config.username, config.password)
 
+    const notAssignedDates = [...(await checkAssignStatus(http, credentials, 'current')), ...(await checkAssignStatus(http, credentials, 'nextweek'))]
+
     const today = new Date()
     const weekBegin = addDays(today, -today.getDay())
 
@@ -511,13 +563,18 @@ Date.prototype.getDOY = function() {
         }
 
         const goalDate = addDays(weekBegin, i)
+        const standardDateStr = date.format(goalDate, "YYYY-MM-DD")
         if (goalDate.getDOY() < today.getDOY()) {
-            await log(`Skipping ${date.format(goalDate, "YYYY-MM-DD")} because they were gone ~ Yes Forever ~ Time flow like a river never stop`)
+            await log(`Skipping ${standardDateStr} because they were gone ~ Yes Forever ~ Can't be controlled like a river never stop`)
+            continue
+        }
+
+        if (!notAssignedDates.includes(standardDateStr)) {
+            await log(`Skipping ${standardDateStr} because you or sombody else already done the job.`)
             continue
         }
 
         try {
-            // await log(`Do work: DOW = ${i - week * 7}, D = ${date.format(goalDate, "YYYY-MM-DD")}, W = ${week}`)
             const table = await fetchDataTable(http, credentials, goalDate)
 
             if (process.argv.includes("--listTeachers")) {
@@ -550,22 +607,22 @@ Date.prototype.getDOY = function() {
             }
 
             if (!staff) {
-                await log("Error! No result was found with candidate: " + JSON.stringify(data.selectionCandidate) + " at: " + date.format(goalDate, "YYYY-MM-DD")) 
+                await log("Error! No result was found with candidate: " + JSON.stringify(data.selectionCandidate) + " at: " + standardDateStr) 
                 continue 
             }
 
             if (!await checkCapacity(http, staff, goalDate)) {
-                await log(`Skipping ${date.format(goalDate, "YYYY-MM-DD")} Because somebody is faster then your network :P`)
+                await log(`Skipping ${standardDateStr} Because somebody is faster then your network :P`)
                 continue
             }
 
             const { err } = await savePlan(http, staff, credentials, data.plan, goalDate)
             if (err) {
-                await log(`Skipping ${date.format(goalDate, "YYYY-MM-DD")} Because server rejected with reason: ${err}`)
+                await log(`Skipping ${standardDateStr} Because server rejected with reason: ${err}`)
                 continue
             }
 
-            await log("Successfully setup plan on " + date.format(goalDate, "YYYY-MM-DD"))
+            await log("Successfully setup plan on " + standardDateStr)
 
         } catch(err) {
             console.error(err)

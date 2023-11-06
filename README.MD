@@ -42,3 +42,14 @@ If you want to see all the teachers you may use the command: (Need a profile!)
 ```
 myweeklyplanner-auto <profileName> --listTeachers
 ```
+
+## Changelog
+
+- 1.0.3: 
+    + Fix overriding exist entries
+    + Improve performance
+
+## Future plan
+
+- [ ] Use commander to manage cli.
+- [ ] Make telegram notify feature use editMessage instead of sending new messages.
