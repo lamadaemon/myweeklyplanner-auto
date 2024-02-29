@@ -538,7 +538,7 @@ Date.prototype.getDOY = function() {
     const dayCount = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
     const mn = this.getMonth();
     const dn = this.getDate();
-    const dayOfYear = dayCount[mn] + dn;
+    let dayOfYear = dayCount[mn] + dn;
     if(mn > 1 && this.isLeapYear()) dayOfYear++;
     return dayOfYear;
 };
