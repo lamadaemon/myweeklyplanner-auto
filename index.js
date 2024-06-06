@@ -4,111 +4,23 @@ const axios = require('axios')
 const HtmlParser = require('node-html-parser')
 const fs = require('fs')
 const date = require('date-and-time')
-
-const [_, selfName, username] = process.argv
-
-if (!username) {
-    console.log("Args: <username> [--genConfig] [--listTeachers] [--tg]")
-    process.exit(-1)
-}
-
-if (process.argv.includes("--genConfig")) {
-    if (fs.existsSync(`${username}.config.json`)) {
-        console.log("File exists!")
-        process.exit(-1)
-    }
-
-    fs.writeFileSync(`${username}.config.json`, JSON.stringify({
-        username,
-        password: "",
-        botToken: "Optional",
-        target: "", // ChannelUsername or UserID
-        schedule: [
-            null, // sun
-            { // mon
-                selectionCandidate: {
-                    room: "Required | Mon",
-                    teacher: "OptionalTeacherName"
-                },
-                plan: ""
-            },
-            {
-                selectionCandidate: {
-                    room: "Required | Tue",
-                    teacher: "OptionalTeacherName"
-                },
-                plan: ""
-            },
-            null, // no fit on wed
-            {
-                selectionCandidate: {
-                    room: "Required | Thu",
-                    teacher: "OptionalTeacherName"
-                },
-                plan: ""
-            },
-            {
-                selectionCandidate: {
-                    room: "Required | Fri",
-                    teacher: "OptionalTeacherName"
-                },
-                plan: ""
-            },
-            null, // sat
-        ],
-    }, undefined, 4))
-
-    process.exit(0)
-}
-
-
-
-if (!fs.existsSync(`${username}.config.json`)) {
-    console.log("Please generate config first")
-    process.exit(-1)
-}
-
-/**
- * @type { boolean }
- */
-const tg = process.argv.includes("--tg")
-
-/**
- * @type { { 
- *      username: string,
- *      password: string,
- *      botToken: string | undefined | null,
- *      target: string | number | undefined | null,
- *      schedule: {
- *          selectionCandidate: {
- *              room: string | undefined | null,
- *              teacher: string | undefined | null,
- *          },
- *          plan: string
- *      }[]
- * } }
- */
-const config = JSON.parse(fs.readFileSync(`${username}.config.json`).toString())
+const { program } = require('commander')
 
 /**
  * @type { Map<string, string> }
  */
 const globalCookieStore = new Map()
 
-if (tg && (!config.botToken || !config.target)) {
-    console.log("Error! Failed to remind via tg! Because no bot token or target was found!")
-    process.exit(-1)
-}
-
 /**
  * Setup http client
  * withCredentials somehow not working. So please manage cookie by your self
  * 
+ * @param {string} baseURL 
  * @returns {axios.Axios}
  */
-async function init() {
+async function init(baseURL) {
     const httpClient = new axios.Axios({
-        baseURL: "https://dt.myweeklyplanner.net",
+        baseURL,
         headers: {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36"
         },
@@ -125,8 +37,6 @@ async function init() {
     const tokenSearcher = /'X-CSRF-TOKEN': ?'(.+)'/g
     const [[_, token]] = response.data.matchAll(tokenSearcher)
     httpClient.defaults.headers["X-CSRF-TOKEN"] = token
-
-    await log("Setting up CSRF Token: " + token)
 
     return httpClient
 }
@@ -253,7 +163,7 @@ async function fetchDataTable(httpClient, credentials, d) {
         }
         fs.writeFileSync("tableProcessError.report.txt", errorTracker)
 
-        await log("Error: Failed to fully parse data table! Error dumped to: tableProcessError.report.txt")
+        console.log("Error: Failed to fully parse data table! Error dumped to: tableProcessError.report.txt")
     }
 
     return teachers
@@ -265,7 +175,7 @@ async function fetchDataTable(httpClient, credentials, d) {
  * @param {*} credentials 
  * @param {'current' | 'nextweek'} week
  */
-async function checkAssignStatus(httpClient, credentials, week) {
+async function fetchAvailableDates(httpClient, credentials, week) {
     const response = await httpClient.get("/ajax.DataTable.Fetch.php", {
         headers: {
             ...exportCookies()
@@ -481,7 +391,6 @@ async function dumpResponse(r, fn, notg) {
     return fileName
 }
 
-
 /**
  * 
  * @param {axios.AxiosResponse<any, any>} r 
@@ -519,14 +428,6 @@ function addDays(date, days) {
     return result;
 }
 
-async function log(msg) {
-    if (tg) {
-        await tgNotify(config.botToken, config.target, username, "log", msg)
-    }
-
-    await console.log("[INFO] " + msg)
-}
-
 Date.prototype.isLeapYear = function() {
     const year = this.getFullYear();
     if((year & 3) != 0) return false;
@@ -543,93 +444,196 @@ Date.prototype.getDOY = function() {
     return dayOfYear;
 };
 
-(async () => {
-    await log("Begin process")
+program
+    .name("MyWeeklyPlanner Automation Script")
+    .description("A tool for setting up plans in CLI")
+    .version("1.1")
 
-    const http = await init()
-    const credentials = await login(http, config.username, config.password)
+program
+    .argument("<username>", "Username")
+    .option("-g --genConfig", "Generate config for <user>")
+    .option("-l --listTeachers", "List all available teachers")
+    .option("-t --tg", "Send a notify in telegram")
+    .option("-q --quiet", "Mute output")
+    .option("-o --override", "Force override existing entries")
+    .action(async (username, { tg, listTeachers, genConfig, quiet, override }) => {
 
-    const notAssignedDates = [...(await checkAssignStatus(http, credentials, 'current')), ...(await checkAssignStatus(http, credentials, 'nextweek'))]
-
-    const today = new Date()
-    const weekBegin = addDays(today, -today.getDay())
-
-    for (let i = 0; i < 14; i ++) {
-        const week = Math.floor(i / 7)
-        const data = config.schedule[i - week * 7]
-        if (!data) {
-            await log(`Skipping ${i}(DOW) becuase no data is present!`)
-            continue
+        if (quiet) {
+            console["log"] = () => void 0
         }
 
-        const goalDate = addDays(weekBegin, i)
-        const standardDateStr = date.format(goalDate, "YYYY-MM-DD")
-        if (goalDate.getDOY() < today.getDOY()) {
-            await log(`Skipping ${standardDateStr} because they were gone ~ Yes Forever ~ Can't be controlled like a river never stop`)
-            continue
+        if (!fs.existsSync(`${username}.config.json`)) {
+            console.log("Please generate config first")
+            process.exit(-1)
         }
 
-        if (!notAssignedDates.includes(standardDateStr)) {
-            await log(`Skipping ${standardDateStr} because you or sombody else already done the job.`)
-            continue
+        if (tg && (!config.botToken || !config.target)) {
+            console.log("Error! Failed to remind via tg! Because no bot token or target was found!")
+            process.exit(-1)
         }
 
-        try {
-            const table = await fetchDataTable(http, credentials, goalDate)
-
-            if (process.argv.includes("--listTeachers")) {
-                for (const j of table) {
-                    await log(`${j.name}(ID = ${j.staffID}) at ${j.room}`)
-                }
-                
-                break
-            }
-
-            if (!data.selectionCandidate || (!data.selectionCandidate.room && !data.selectionCandidate.teacher)) {
-                await log("Error! No candicate is provided!")
+        if (genConfig) {
+            if (fs.existsSync(`${username}.config.json`)) {
+                console.log("File exists!")
                 process.exit(-1)
             }
-
-            let staff = null
-
-            if (data.selectionCandidate.room) {
-                for (const j of table) {
-                    if (j.room == data.selectionCandidate.room) {
-                        staff = j.staffID
-                    }
-                }
-            } else if (data.selectionCandidate.teacher) {
-                for (const j of table) {
-                    if (j.name.includes(data.selectionCandidate.name)) {
-                        staff = j.staffID
-                    }
-                }
-            }
-
-            if (!staff) {
-                await log("Error! No result was found with candidate: " + JSON.stringify(data.selectionCandidate) + " at: " + standardDateStr) 
-                continue 
-            }
-
-            if (!await checkCapacity(http, staff, goalDate)) {
-                await log(`Skipping ${standardDateStr} Because somebody is faster then your network :P`)
-                continue
-            }
-
-            const { err } = await savePlan(http, staff, credentials, data.plan, goalDate)
-            if (err) {
-                await log(`Skipping ${standardDateStr} Because server rejected with reason: ${err}`)
-                continue
-            }
-
-            await log("Successfully setup plan on " + standardDateStr)
-
-        } catch(err) {
-            console.error(err)
+        
+            fs.writeFileSync(`${username}.config.json`, JSON.stringify({
+                baseURL: "example.myweeklyplanner.net",
+                username,
+                password: "",
+                botToken: "Optional",
+                target: "", // ChannelUsername or UserID
+                schedule: [
+                    null, // sun
+                    { // mon
+                        selectionCandidate: {
+                            room: "Required | Mon",
+                            teacher: "OptionalTeacherName"
+                        },
+                        plan: ""
+                    },
+                    {
+                        selectionCandidate: {
+                            room: "Required | Tue",
+                            teacher: "OptionalTeacherName"
+                        },
+                        plan: ""
+                    },
+                    null, // no fit on wed
+                    {
+                        selectionCandidate: {
+                            room: "Required | Thu",
+                            teacher: "OptionalTeacherName"
+                        },
+                        plan: ""
+                    },
+                    {
+                        selectionCandidate: {
+                            room: "Required | Fri",
+                            teacher: "OptionalTeacherName"
+                        },
+                        plan: ""
+                    },
+                    null, // sat
+                ],
+            }, undefined, 4))
+        
+            process.exit(0)
         }
-    }
-    
-    await logout(http)
 
-    await log("Logged out successfully! Renew job done!")
-})()
+        /**
+        * @type { { 
+        *      baseURL: string,
+        *      username: string,
+        *      password: string,
+        *      botToken: string | undefined | null,
+        *      target: string | number | undefined | null,
+        *      schedule: {
+        *          selectionCandidate: {
+        *              room: string | undefined | null,
+        *              teacher: string | undefined | null,
+        *          },
+        *          plan: string
+        *      }[]
+        * } }
+        */
+       const config = JSON.parse(fs.readFileSync(`${username}.config.json`).toString())
+        
+        const http = await init(config.baseURL)
+        const credentials = await login(http, config.username, config.password)
+    
+        const notAssignedDates = [
+            ...(await fetchAvailableDates(http, credentials, 'current')),
+            ...(await fetchAvailableDates(http, credentials, 'nextweek'))
+        ]
+    
+        const today = new Date()
+        const weekBegin = addDays(today, -today.getDay())
+    
+        for (let i = 0; i < 14; i ++) {
+            const week = Math.floor(i / 7)
+            const data = config.schedule[i - week * 7]
+            if (!data) {
+                console.log(`Skipping ${i}(DOW) becuase no data is present!`)
+                continue
+            }
+    
+            const goalDate = addDays(weekBegin, i)
+            const standardDateStr = date.format(goalDate, "YYYY-MM-DD")
+            if (goalDate.getDOY() < today.getDOY()) {
+                console.log(`Skipping ${standardDateStr} because it was gone ~ Yes Forever ~ Can't be controlled like a river never stop`)
+                continue
+            }
+    
+            if (!override && !notAssignedDates.includes(standardDateStr)) {
+                console.log(`Skipping ${standardDateStr} because you or sombody else already done the job. (hint: use --override)`)
+                continue
+            }
+    
+            try {
+                const table = await fetchDataTable(http, credentials, goalDate)
+    
+                if (listTeachers) {
+                    console.log(`At ${goalDate}`)
+                    for (const j of table) {
+                        console.log(`  ${j.name}(ID = ${j.staffID}) at ${j.room}`)
+                    }
+                    
+                    break
+                }
+    
+                if (!data.selectionCandidate || (!data.selectionCandidate.room && !data.selectionCandidate.teacher)) {
+                    console.log("Error! No candicate is provided!")
+                    process.exit(-1)
+                }
+    
+                let staff = null
+    
+                if (data.selectionCandidate.room) {
+                    for (const j of table) {
+                        if (j.room == data.selectionCandidate.room) {
+                            staff = j.staffID
+                        }
+                    }
+                } else if (data.selectionCandidate.teacher) {
+                    for (const j of table) {
+                        if (j.name.includes(data.selectionCandidate.name)) {
+                            staff = j.staffID
+                        }
+                    }
+                }
+    
+                if (!staff) {
+                    console.log("Error! No result was found with candidate: " + JSON.stringify(data.selectionCandidate) + " at: " + standardDateStr) 
+                    continue 
+                }
+    
+                if (!await checkCapacity(http, staff, goalDate)) {
+                    console.log(`Skipping ${standardDateStr} because its full`)
+                    continue
+                }
+    
+                const { err } = await savePlan(http, staff, credentials, data.plan, goalDate)
+                if (err) {
+                    console.log(`Skipping ${standardDateStr} because server rejected with reason: ${err}`)
+                    continue
+                }
+    
+                console.log("Successfully setup plan on " + standardDateStr)
+    
+            } catch(err) {
+                console.error(err)
+            }
+        }
+        
+        await logout(http)
+
+        if (tg) {
+            await tgNotify(config.botToken, config.target, config.username, "log", "Success")
+        }
+    
+        console.log("Logged out successfully! Renew job done!")
+    })
+
+program.parse()
